@@ -1,0 +1,7 @@
+packages:
+  - "apps/web"
+  - "apps/api"
+  - "packages/*"
+onlyBuiltDependencies:
+  - esbuild
+  - sharp

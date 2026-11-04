@@ -1,0 +1,5 @@
+project_id = "my-gcp-project"
+region     = "us-central1"
+env        = "prod"
+domain     = "app.clipforge.example"
+image_tag  = "2026-11-03-1"

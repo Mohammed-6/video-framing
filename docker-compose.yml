@@ -1,0 +1,82 @@
+# Local stack: Postgres + API + media worker + web.
+# Secrets come from .env (see .env.example):  docker compose up --build
+
+x-shared: &shared
+  DATABASE_URL: postgres://clipforge:clipforge@postgres:5432/clipforge
+  STORAGE_DRIVER: local
+  LOCAL_STORAGE_DIR: /data/blobs
+  CREDENTIALS_KEY: ${CREDENTIALS_KEY:?Set CREDENTIALS_KEY in .env (32 random bytes, base64)}
+  GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+  GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+
+services:
+  postgres:
+    restart: unless-stopped
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: clipforge
+      POSTGRES_PASSWORD: clipforge
+      POSTGRES_DB: clipforge
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clipforge"]
+      interval: 3s
+      retries: 20
+
+  api:
+    restart: unless-stopped
+    build: { context: ., dockerfile: infra/docker/api.Dockerfile }
+    environment:
+      <<: *shared
+      NODE_ENV: development
+      PORT: "4000"
+      APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      STORAGE_SIGNING_SECRET: ${STORAGE_SIGNING_SECRET:-dev-only-signing-secret}
+      PUBLIC_API_URL: http://localhost:4000
+      WEB_ORIGIN: http://localhost:${WEB_PORT:-3000}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      YOUTUBE_DAILY_QUOTA: ${YOUTUBE_DAILY_QUOTA:-10000}
+      YOUTUBE_CACHE_TTL_SECONDS: ${YOUTUBE_CACHE_TTL_SECONDS:-3600}
+    ports: ["4000:4000"]
+    volumes: [blobs:/data/blobs]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  media-worker:
+    restart: unless-stopped
+    build: { context: ., dockerfile: infra/docker/media-worker.Dockerfile }
+    user: root # shares the blobs volume with the API container in dev
+    environment:
+      <<: *shared
+      TRANSCRIBE_PROVIDER: ${TRANSCRIBE_PROVIDER:-faster_whisper}
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      CLIP_PLANNER: ${CLIP_PLANNER:-heuristic}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT:-}
+      PUBLISH_DRY_RUN: ${PUBLISH_DRY_RUN:-false}
+      YTDLP_COOKIES_FILE: ${YTDLP_COOKIES_FILE:-}
+    volumes:
+      - blobs:/data/blobs
+      - models:/models
+      - ./secrets:/secrets:ro # put youtube-cookies.txt here if YouTube asks for a bot check
+    depends_on:
+      api: { condition: service_healthy } # API applies migrations on start
+
+  web:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+      args: { API_INTERNAL_URL: "http://api:4000" }
+    ports: ["${WEB_PORT:-3000}:3000"]
+    depends_on: [api]
+
+volumes:
+  pgdata:
+  blobs:
+  models:
